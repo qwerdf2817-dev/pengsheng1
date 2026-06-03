@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}管理后台{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-gear"></i> 管理后台</h2>
+    <div>
+        <a href="{{ url_for('admin.upload') }}" class="btn btn-success">
+            <i class="bi bi-upload"></i> 上传 Excel
+        </a>
+        <a href="{{ url_for('admin.user_list') }}" class="btn btn-info text-white">
+            <i class="bi bi-people"></i> 用户权限管理
+        </a>
+    </div>
+</div>
+
+{% if files %}
+<div class="table-responsive">
+    <table class="table table-hover align-middle">
+        <thead class="table-dark">
+            <tr>
+                <th>表格名称</th>
+                <th>原始文件名</th>
+                <th>工作表</th>
+                <th>上传时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for f in files %}
+            <tr>
+                <td><strong>{{ f.display_name }}</strong></td>
+                <td><small class="text-muted">{{ f.original_filename }}</small></td>
+                <td>
+                    {% for sheet in f.sheets %}
+                        <span class="badge bg-secondary">{{ sheet.sheet_name }}</span>
+                    {% endfor %}
+                </td>
+                <td>{{ f.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>
+                    <div class="btn-group">
+                        <a href="{{ url_for('admin.export_file', file_id=f.id) }}" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-download"></i> 导出
+                        </a>
+                        <a href="{{ url_for('admin.history', file_id=f.id) }}" class="btn btn-sm btn-outline-info">
+                            <i class="bi bi-clock-history"></i> 日志
+                        </a>
+                        <button class="btn btn-sm btn-outline-danger"
+                                onclick="if(confirm('确定删除「{{ f.display_name }}」吗？')){ document.getElementById('del-form-{{ f.id }}').submit(); }">
+                            <i class="bi bi-trash"></i> 删除
+                        </button>
+                    </div>
+                    <form id="del-form-{{ f.id }}" method="POST" action="{{ url_for('admin.delete_file', file_id=f.id) }}" style="display:none"></form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="text-center py-5">
+    <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+    <p class="text-muted mt-3">还没有上传任何表格</p>
+    <a href="{{ url_for('admin.upload') }}" class="btn btn-success">上传第一个 Excel</a>
+</div>
+{% endif %}
+{% endblock %}

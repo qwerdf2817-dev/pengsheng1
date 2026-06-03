@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}权限管理 — {{ user.username }} / {{ file.display_name }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>
+        <i class="bi bi-key"></i>
+        {{ user.username }} — <small class="text-muted">{{ file.display_name }}</small>
+    </h2>
+    <a href="{{ url_for('admin.user_list') }}" class="btn btn-secondary">
+        <i class="bi bi-arrow-left"></i> 返回用户列表
+    </a>
+</div>
+
+{% for sheet in sheets %}
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">
+            <i class="bi bi-file-earmark-spreadsheet"></i> {{ sheet.sheet_name }}
+        </h5>
+        <button class="btn btn-sm btn-outline-primary" onclick="addRange({{ sheet.id }})">
+            <i class="bi bi-plus-circle"></i> 添加可编辑区域
+        </button>
+    </div>
+    <div class="card-body">
+        <!-- Preview table (compact) -->
+        <div class="table-responsive mb-3">
+            <table class="table table-bordered table-sm permission-table" data-sheet-id="{{ sheet.id }}">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:40px" class="text-center">#</th>
+                        {% for col in sheet_cols[sheet.id] %}
+                        <th style="min-width:80px" class="text-center col-header" data-col-idx="{{ loop.index0 }}">
+                            {{ col.label }}
+                            <small class="text-muted">({{ loop.index0 }})</small>
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% set row_count = 10 %}
+                    {% for r in range(row_count) %}
+                    <tr data-row-idx="{{ r }}">
+                        <td class="text-center text-muted">{{ r }}</td>
+                        {% for col in sheet_cols[sheet.id] %}
+                        <td class="editable-cell text-center"
+                            data-col="{{ loop.index0 }}"
+                            data-row="{{ r }}"
+                            style="cursor:default;">
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Existing permissions for this sheet -->
+        <h6>已分配的可编辑区域：</h6>
+        <div id="perm-list-{{ sheet.id }}">
+            {% if permissions[sheet.id] %}
+                {% for p in permissions[sheet.id] %}
+                <span class="badge bg-success me-2 mb-2 p-2 perm-badge" data-perm-id="{{ p.id }}">
+                    区域: [{{ p.col_start }},{{ p.row_start }}] → [{{ p.col_end }},{{ p.row_end }}]
+                    <button class="btn-close btn-close-white ms-2" style="font-size:0.6rem"
+                            onclick="deletePerm({{ p.id }}, {{ sheet.id }})"></button>
+                </span>
+                {% endfor %}
+            {% else %}
+                <span class="text-muted" id="no-perm-{{ sheet.id }}">暂无</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Hidden form for range submission -->
+<form id="perm-form" method="POST" style="display:none">
+    <input type="hidden" name="sheet_id" id="form-sheet-id">
+    <input type="hidden" name="col_start" id="form-col-start">
+    <input type="hidden" name="col_end" id="form-col-end">
+    <input type="hidden" name="row_start" id="form-row-start">
+    <input type="hidden" name="row_end" id="form-row-end">
+</form>
+
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .permission-table td.editable-cell {
+        user-select: none;
+        border: 1px solid #dee2e6;
+        min-width: 60px;
+        height: 28px;
+        font-size: 0.8rem;
+    }
+    .permission-table td.selected {
+        background-color: #cfe2ff !important;
+        border-color: #0d6efd !important;
+    }
+    .permission-table td.permitted {
+        background-color: #d1e7dd !important;
+        border-color: #198754 !important;
+    }
+    .perm-badge {
+        font-size: 0.85rem;
+    }
+    .selecting {
+        cursor: crosshair !important;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let selectMode = false;
+    let selectSheetId = null;
+    let selectStart = null;
+
+    function addRange(sheetId) {
+        if (selectMode) {
+            // Cancel existing selection
+            cancelSelect(sheetId);
+        }
+        selectMode = true;
+        selectSheetId = sheetId;
+        selectStart = null;
+
+        const table = document.querySelector(`.permission-table[data-sheet-id="${sheetId}"]`);
+        table.querySelectorAll('td.editable-cell').forEach(cell => {
+            cell.classList.add('selecting');
+            cell.style.cursor = 'crosshair';
+            cell.addEventListener('mousedown', onCellMouseDown);
+        });
+
+        alert('请在预览表格中用鼠标拖拽选择可编辑区域（从起始单元格到结束单元格）');
+    }
+
+    function onCellMouseDown(e) {
+        const cell = e.target;
+        const col = parseInt(cell.dataset.col);
+        const row = parseInt(cell.dataset.row);
+
+        selectStart = { col, row };
+
+        // Listen for mouseup on this cell or another
+        const table = cell.closest('.permission-table');
+        const cells = table.querySelectorAll('td.editable-cell');
+
+        function onMouseUp(e2) {
+            const endCell = e2.target.closest('td.editable-cell');
+            if (!endCell) return;
+
+            const colEnd = parseInt(endCell.dataset.col);
+            const rowEnd = parseInt(endCell.dataset.row);
+
+            if (selectStart === null) return;
+
+            // Normalize: ensure start <= end
+            const colStart = Math.min(selectStart.col, colEnd);
+            const realColEnd = Math.max(selectStart.col, colEnd);
+            const rowStart = Math.min(selectStart.row, rowEnd);
+            const realRowEnd = Math.max(selectStart.row, rowEnd);
+
+            // Fill hidden form and submit
+            document.getElementById('form-sheet-id').value = selectSheetId;
+            document.getElementById('form-col-start').value = colStart;
+            document.getElementById('form-col-end').value = realColEnd;
+            document.getElementById('form-row-start').value = rowStart;
+            document.getElementById('form-row-end').value = realRowEnd;
+
+            fetch(window.location.href, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams(new FormData(document.getElementById('perm-form')))
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    location.reload();
+                } else {
+                    alert('保存失败: ' + data.error);
+                }
+            });
+
+            // Cleanup
+            cancelSelect(selectSheetId);
+            cells.forEach(c => c.removeEventListener('mouseup', onMouseUp));
+        }
+
+        cells.forEach(c => c.addEventListener('mouseup', onMouseUp, { once: true }));
+    }
+
+    function cancelSelect(sheetId) {
+        selectMode = false;
+        selectSheetId = null;
+        selectStart = null;
+
+        const table = document.querySelector(`.permission-table[data-sheet-id="${sheetId}"]`);
+        if (table) {
+            table.querySelectorAll('td.editable-cell').forEach(cell => {
+                cell.classList.remove('selecting');
+                cell.style.cursor = 'default';
+                cell.classList.remove('selected');
+            });
+        }
+    }
+
+    function deletePerm(permId, sheetId) {
+        if (!confirm('确定删除该权限区域吗？')) return;
+        fetch(`/admin/permissions/${permId}/delete`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) location.reload();
+            });
+    }
+
+    // Highlight existing permitted cells on load
+    document.addEventListener('DOMContentLoaded', function() {
+        const existingPerms = {{ permissions | tojson }};
+        for (const [sheetId, perms] of Object.entries(existingPerms)) {
+            const table = document.querySelector(`.permission-table[data-sheet-id="${sheetId}"]`);
+            if (!table) continue;
+            perms.forEach(p => {
+                for (let r = p.row_start; r <= p.row_end; r++) {
+                    for (let c = p.col_start; c <= p.col_end; c++) {
+                        const cell = table.querySelector(`td[data-row="${r}"][data-col="${c}"]`);
+                        if (cell) cell.classList.add('permitted');
+                    }
+                }
+            });
+        }
+    });
+</script>
+{% endblock %}

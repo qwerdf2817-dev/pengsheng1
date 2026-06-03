@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.db
+.env
+uploads/
+migrations/versions/*
+!migrations/versions/.gitkeep
+dist/
+build/
+*.spec
+ngrok.exe
+ngrok.zip
+*.log
+/tmp/

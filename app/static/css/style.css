@@ -1,0 +1,33 @@
+/* ──────────────────────────────────────
+   Global Styles
+   ────────────────────────────────────── */
+body {
+    background-color: #f8f9fa;
+}
+
+.card {
+    border-radius: 0.5rem;
+}
+
+/* ──────────────────────────────────────
+   Handsontable overrides
+   ────────────────────────────────────── */
+.handsontable .readonly-cell {
+    background-color: #f0f0f0 !important;
+    color: #999 !important;
+}
+
+.handsontable .editable-cell {
+    background-color: #e8f5e9 !important;
+}
+
+/* ──────────────────────────────────────
+   Permission table (admin)
+   ────────────────────────────────────── */
+.permission-table td.editable-cell {
+    transition: background-color 0.15s ease;
+}
+.permission-table td.editable-cell.selecting:hover {
+    background-color: #e7f1ff;
+    border-color: #86b7fe;
+}

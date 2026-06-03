@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}可编辑表格{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-table"></i> 可编辑表格列表</h2>
+
+{% if files %}
+<div class="row">
+    {% for f in files %}
+    <div class="col-md-4 mb-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="bi bi-file-earmark-spreadsheet text-success"></i>
+                    {{ f.display_name }}
+                </h5>
+                <p class="card-text text-muted small">
+                    工作表：
+                    {% for sheet in f.sheets %}
+                        <span class="badge bg-secondary">{{ sheet.sheet_name }}</span>
+                    {% endfor %}
+                </p>
+                <p class="card-text text-muted small">
+                    上传时间：{{ f.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </p>
+            </div>
+            <div class="card-footer bg-transparent">
+                <a href="{{ url_for('editor.editor_page', file_id=f.id) }}" class="btn btn-primary btn-sm w-100">
+                    <i class="bi bi-pencil-square"></i> 打开编辑
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center py-5">
+    <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+    <p class="text-muted mt-3">暂无可编辑的表格</p>
+    <p class="text-muted small">请联系管理员上传 Excel 文件</p>
+</div>
+{% endif %}
+{% endblock %}

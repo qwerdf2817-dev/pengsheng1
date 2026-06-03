@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}编辑 — {{ file.display_name }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-pencil-square"></i> {{ file.display_name }}</h4>
+        <small class="text-muted">
+            <span class="text-success fw-bold">绿色单元格</span> = 可编辑 &nbsp;
+            <span class="text-secondary">灰色单元格</span> = 只读
+        </small>
+    </div>
+    <div>
+        <button id="save-btn" class="btn btn-success" onclick="saveChanges()" disabled>
+            <i class="bi bi-check-lg"></i> 保存修改
+        </button>
+        <a href="{{ url_for('editor.file_list') }}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left"></i> 返回
+        </a>
+    </div>
+</div>
+
+<!-- Sheet tabs -->
+<ul class="nav nav-tabs mb-3" id="sheet-tabs">
+    {% for sheet in sheets %}
+    <li class="nav-item">
+        <button class="nav-link {% if loop.first %}active{% endif %}"
+                data-sheet-id="{{ sheet.id }}"
+                onclick="switchSheet({{ sheet.id }}, this)">
+            {{ sheet.sheet_name }}
+        </button>
+    </li>
+    {% endfor %}
+</ul>
+
+<!-- Editor container -->
+<div id="hot-container" style="height: 500px; overflow: auto;"></div>
+
+<!-- Status bar -->
+<div class="d-flex justify-content-between mt-2">
+    <span id="status-text" class="text-muted small">就绪</span>
+    <span id="save-status" class="small"></span>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<!-- Handsontable CSS -->
+<link href="https://cdn.jsdelivr.net/npm/handsontable@14.6.1/dist/handsontable.full.min.css" rel="stylesheet">
+<style>
+    #hot-container .handsontable td.readonly-cell {
+        background-color: #f0f0f0;
+        color: #999;
+    }
+    #hot-container .handsontable td.editable-cell {
+        background-color: #e8f5e9;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<!-- Handsontable JS -->
+<script src="https://cdn.jsdelivr.net/npm/handsontable@14.6.1/dist/handsontable.full.min.js"></script>
+
+<script>
+    let hot = null;
+    let currentSheetId = null;
+    let currentColumnKeys = [];
+    let currentPermissions = [];
+    let originalData = null;
+    let pendingChanges = [];
+
+    // Initialize with the first sheet on load
+    const firstTab = document.querySelector('#sheet-tabs button');
+    if (firstTab) {
+        loadSheet(firstTab.dataset.sheetId);
+    }
+
+    function switchSheet(sheetId, btn) {
+        // Update tab UI
+        document.querySelectorAll('#sheet-tabs button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadSheet(sheetId);
+    }
+
+    function loadSheet(sheetId) {
+        currentSheetId = sheetId;
+        document.getElementById('status-text').textContent = '加载中...';
+        document.getElementById('save-btn').disabled = true;
+        pendingChanges = [];
+
+        fetch(`/api/sheet/${sheetId}/data`)
+            .then(r => r.json())
+            .then(data => {
+                currentColumnKeys = data.column_keys;
+                currentPermissions = data.permissions;
+                originalData = JSON.parse(JSON.stringify(data.rows));
+
+                const container = document.getElementById('hot-container');
+                container.innerHTML = '';
+
+                hot = new Handsontable(container, {
+                    data: data.rows,
+                    columns: data.columns.map((label, idx) => ({
+                        title: label,
+                        type: 'text',
+                    })),
+                    rowHeaders: true,
+                    colHeaders: data.columns,
+                    licenseKey: 'non-commercial-and-evaluation',
+                    height: '500px',
+                    width: '100%',
+                    stretchH: 'all',
+                    contextMenu: false,
+                    cells: function(row, col) {
+                        const isEditable = hasPermission(row, col);
+                        if (isEditable) {
+                            this.readOnly = false;
+                            this.className = 'editable-cell';
+                        } else {
+                            this.readOnly = true;
+                            this.className = 'readonly-cell';
+                        }
+                        return this;
+                    },
+                    afterChange: function(changes, source) {
+                        if (source === 'loadData' || !changes) return;
+
+                        for (const change of changes) {
+                            const [row, prop, oldVal, newVal] = change;
+                            const colIdx = hot.propToCol(prop);
+
+                            // Check if this cell is editable
+                            if (!hasPermission(row, colIdx)) {
+                                // Revert non-permitted changes
+                                setTimeout(() => {
+                                    hot.setDataAtCell(row, colIdx, oldVal);
+                                }, 0);
+                                return;
+                            }
+
+                            // Record pending change
+                            const existing = pendingChanges.find(c => c.row === row && c.col === colIdx);
+                            if (existing) {
+                                existing.new_value = newVal;
+                            } else {
+                                pendingChanges.push({
+                                    row: row,
+                                    col: colIdx,
+                                    new_value: newVal,
+                                });
+                            }
+                        }
+
+                        document.getElementById('save-btn').disabled = (pendingChanges.length === 0);
+                        document.getElementById('status-text').textContent =
+                            `已修改 ${pendingChanges.length} 个单元格`;
+                    }
+                });
+
+                document.getElementById('status-text').textContent = '就绪';
+            })
+            .catch(err => {
+                document.getElementById('status-text').textContent = '加载失败: ' + err.message;
+            });
+    }
+
+    function hasPermission(row, col) {
+        for (const p of currentPermissions) {
+            if (col >= p.col_start && col <= p.col_end && row >= p.row_start && row <= p.row_end) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function saveChanges() {
+        if (pendingChanges.length === 0) return;
+
+        const btn = document.getElementById('save-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 保存中...';
+        document.getElementById('save-status').innerHTML =
+            '<span class="text-primary">保存中...</span>';
+
+        fetch(`/api/sheet/${currentSheetId}/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ changes: pendingChanges })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                document.getElementById('save-status').innerHTML =
+                    '<span class="text-success"><i class="bi bi-check-circle"></i> 保存成功</span>';
+                pendingChanges = [];
+                btn.innerHTML = '<i class="bi bi-check-lg"></i> 保存修改';
+                document.getElementById('status-text').textContent = '已保存';
+
+                // Refresh original data reference
+                originalData = JSON.parse(JSON.stringify(hot.getData()));
+            } else {
+                document.getElementById('save-status').innerHTML =
+                    '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + data.error + '</span>';
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-check-lg"></i> 保存修改';
+            }
+            setTimeout(() => {
+                document.getElementById('save-status').textContent = '';
+            }, 3000);
+        })
+        .catch(err => {
+            document.getElementById('save-status').innerHTML =
+                '<span class="text-danger">网络错误: ' + err.message + '</span>';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check-lg"></i> 保存修改';
+        });
+    }
+</script>
+{% endblock %}

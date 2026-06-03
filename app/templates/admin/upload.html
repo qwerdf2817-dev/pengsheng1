@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}上传 Excel{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card shadow">
+            <div class="card-header bg-success text-white">
+                <h4 class="mb-0"><i class="bi bi-upload"></i> 上传 Excel 文件</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    {{ form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ form.display_name.label(class="form-label") }}
+                        {{ form.display_name(class="form-control", placeholder="给表格起个名字，如：2026年6月工资表") }}
+                        {% for error in form.display_name.errors %}
+                            <div class="text-danger small">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.file.label(class="form-label") }}
+                        {{ form.file(class="form-control", accept=".xlsx,.xls") }}
+                        <div class="form-text">支持 .xlsx 和 .xls 格式，文件最大 16MB</div>
+                        {% for error in form.file.errors %}
+                            <div class="text-danger small">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    {{ form.submit(class="btn btn-success") }}
+                    <a href="{{ url_for('admin.dashboard') }}" class="btn btn-secondary">返回</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
