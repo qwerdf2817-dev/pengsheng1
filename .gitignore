@@ -12,3 +12,4 @@ ngrok.exe
 ngrok.zip
 *.log
 /tmp/
+NUL
