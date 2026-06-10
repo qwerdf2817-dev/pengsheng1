@@ -6,7 +6,7 @@ from . import bp
 from .forms import UploadForm, PermissionForm
 from app.models import (
     User, ExcelFile, Sheet, SheetColumn, SheetRow,
-    UserRangePermission, EditHistory,
+    UserRangePermission, EditHistory, UserEditStatus,
 )
 from app.extensions import db
 from utils.excel_io import import_excel, export_excel
@@ -28,7 +28,60 @@ def restrict_to_admin():
 def dashboard():
     files = ExcelFile.query.filter_by(is_active=True)\
         .order_by(ExcelFile.created_at.desc()).all()
-    return render_template('admin/dashboard.html', files=files)
+
+    # Gather completion stats per file
+    file_status_stats = {}
+    for f in files:
+        sheet_ids = [s.id for s in f.sheets]
+        if sheet_ids:
+            permitted_users = db.session.query(
+                UserRangePermission.user_id
+            ).filter(
+                UserRangePermission.sheet_id.in_(sheet_ids)
+            ).distinct().all()
+            permitted_ids = [r[0] for r in permitted_users]
+
+            if permitted_ids:
+                completed_count = UserEditStatus.query.filter(
+                    UserEditStatus.file_id == f.id,
+                    UserEditStatus.is_completed == True,
+                    UserEditStatus.user_id.in_(permitted_ids)
+                ).count()
+                total = len(permitted_ids)
+
+                # Get user details with status
+                users_in_file = User.query.filter(User.id.in_(permitted_ids)).all()
+                statuses = UserEditStatus.query.filter(
+                    UserEditStatus.file_id == f.id,
+                    UserEditStatus.user_id.in_(permitted_ids)
+                ).all()
+                status_map = {s.user_id: s for s in statuses}
+
+                user_details = []
+                for u in users_in_file:
+                    st = status_map.get(u.id)
+                    user_details.append({
+                        'username': u.username,
+                        'is_completed': st.is_completed if st else False,
+                        'completed_at': st.completed_at.strftime('%m-%d %H:%M') if (st and st.completed_at) else None,
+                    })
+                user_details.sort(key=lambda x: (x['is_completed'], x['username']))
+            else:
+                completed_count = 0
+                total = 0
+                user_details = []
+        else:
+            completed_count = 0
+            total = 0
+            user_details = []
+
+        file_status_stats[f.id] = {
+            'total': total,
+            'completed_count': completed_count,
+            'user_details': user_details,
+        }
+
+    return render_template('admin/dashboard.html', files=files, file_status_stats=file_status_stats)
 
 
 # ──────────────────────────────────────────────
@@ -37,33 +90,71 @@ def dashboard():
 @bp.route('/upload', methods=['GET', 'POST'])
 def upload():
     form = UploadForm()
+    # Populate existing files for merge dropdown
+    existing_files = ExcelFile.query.filter_by(is_active=True)\
+        .order_by(ExcelFile.created_at.desc()).all()
+
     if form.validate_on_submit():
+        merge_mode = request.form.get('merge_mode', 'new')
+        target_file_id = request.form.get('target_file_id', type=int)
+
         # Save file to disk with unique name
         ext = os.path.splitext(form.file.data.filename)[1]
         unique_name = f'{uuid.uuid4().hex}{ext}'
         upload_dir = current_app.config.get('UPLOAD_FOLDER', 'uploads')
         stored_path = os.path.join(upload_dir, unique_name)
 
-        file_record = ExcelFile(
-            display_name=form.display_name.data,
-            original_filename=form.file.data.filename,
-            stored_path=stored_path,
-            uploaded_by=current_user.id,
-        )
-        db.session.add(file_record)
-        db.session.flush()  # get file_record.id
+        # Save uploaded file to disk first
+        form.file.data.save(stored_path)
 
-        try:
-            import_excel(form.file.data, stored_path, file_record)
-            flash(f'导入成功：{form.display_name.data}', 'success')
-        except Exception as e:
-            db.session.rollback()
-            flash(f'导入失败：{str(e)}', 'danger')
-            return render_template('admin/upload.html', form=form)
+        if merge_mode == 'merge' and target_file_id:
+            # ── 合并模式：追加到已有表格 ──
+            target_file = ExcelFile.query.get(target_file_id)
+            if not target_file:
+                flash('目标表格不存在', 'danger')
+                return render_template('admin/upload.html', form=form, existing_files=existing_files)
+
+            # Determine starting sheet order
+            max_order = db.session.query(
+                db.func.max(Sheet.sheet_order)
+            ).filter(Sheet.file_id == target_file.id).scalar()
+            starting_order = (max_order or -1) + 1
+
+            try:
+                import_excel(stored_path, target_file, starting_sheet_order=starting_order)
+                db.session.commit()
+                flash(f'已将「{form.display_name.data}」合并到「{target_file.display_name}」', 'success')
+            except Exception as e:
+                db.session.rollback()
+                if os.path.exists(stored_path):
+                    os.remove(stored_path)
+                flash(f'合并失败：{str(e)}', 'danger')
+                return render_template('admin/upload.html', form=form, existing_files=existing_files)
+        else:
+            # ── 新建模式 ──
+            file_record = ExcelFile(
+                display_name=form.display_name.data,
+                original_filename=form.file.data.filename,
+                stored_path=stored_path,
+                uploaded_by=current_user.id,
+            )
+            db.session.add(file_record)
+            db.session.flush()  # get file_record.id
+
+            try:
+                import_excel(stored_path, file_record)
+                db.session.commit()
+                flash(f'导入成功：{form.display_name.data}', 'success')
+            except Exception as e:
+                db.session.rollback()
+                if os.path.exists(stored_path):
+                    os.remove(stored_path)
+                flash(f'导入失败：{str(e)}', 'danger')
+                return render_template('admin/upload.html', form=form, existing_files=existing_files)
 
         return redirect(url_for('admin.dashboard'))
 
-    return render_template('admin/upload.html', form=form)
+    return render_template('admin/upload.html', form=form, existing_files=existing_files)
 
 
 # ──────────────────────────────────────────────

@@ -19,25 +19,64 @@
         <thead class="table-dark">
             <tr>
                 <th>表格名称</th>
-                <th>原始文件名</th>
                 <th>工作表</th>
+                <th>编辑完成状态</th>
                 <th>上传时间</th>
                 <th>操作</th>
             </tr>
         </thead>
         <tbody>
             {% for f in files %}
+            {% set stats = file_status_stats.get(f.id, {}) %}
             <tr>
-                <td><strong>{{ f.display_name }}</strong></td>
-                <td><small class="text-muted">{{ f.original_filename }}</small></td>
+                <td>
+                    <a href="{{ url_for('editor.editor_page', file_id=f.id) }}" class="fw-bold text-decoration-none">
+                        {{ f.display_name }}
+                        <i class="bi bi-box-arrow-up-right small text-muted"></i>
+                    </a>
+                </td>
                 <td>
                     {% for sheet in f.sheets %}
                         <span class="badge bg-secondary">{{ sheet.sheet_name }}</span>
                     {% endfor %}
                 </td>
+                <td>
+                    {% if stats.total > 0 %}
+                        <div class="d-flex align-items-center gap-2">
+                            <!-- 进度条 -->
+                            <div class="progress flex-grow-1" style="height: 8px; min-width: 80px;">
+                                <div class="progress-bar {% if stats.completed_count == stats.total %}bg-success{% else %}bg-warning{% endif %}"
+                                     style="width: {{ (stats.completed_count / stats.total * 100) | int }}%">
+                                </div>
+                            </div>
+                            <span class="small {% if stats.completed_count == stats.total %}text-success{% else %}text-warning{% endif %} fw-bold">
+                                {{ stats.completed_count }}/{{ stats.total }}
+                            </span>
+                        </div>
+                        <!-- 用户状态标签 -->
+                        <div class="mt-1">
+                            {% for u in stats.user_details %}
+                                {% if u.is_completed %}
+                                    <span class="badge bg-success me-1 mb-1" title="完成于 {{ u.completed_at }}">
+                                        <i class="bi bi-check-circle"></i> {{ u.username }}
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-warning text-dark me-1 mb-1 blinking-badge" title="未完成">
+                                        <i class="bi bi-clock"></i> {{ u.username }}
+                                    </span>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <span class="text-muted small">尚未分配用户</span>
+                    {% endif %}
+                </td>
                 <td>{{ f.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td>
                     <div class="btn-group">
+                        <a href="{{ url_for('editor.editor_page', file_id=f.id) }}" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-pencil-square"></i> 打开
+                        </a>
                         <a href="{{ url_for('admin.export_file', file_id=f.id) }}" class="btn btn-sm btn-outline-primary">
                             <i class="bi bi-download"></i> 导出
                         </a>
@@ -63,4 +102,16 @@
     <a href="{{ url_for('admin.upload') }}" class="btn btn-success">上传第一个 Excel</a>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    @keyframes blink-warning {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+    .blinking-badge {
+        animation: blink-warning 1.5s infinite;
+    }
+</style>
 {% endblock %}

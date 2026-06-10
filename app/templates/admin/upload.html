@@ -8,11 +8,11 @@
                 <h4 class="mb-0"><i class="bi bi-upload"></i> 上传 Excel 文件</h4>
             </div>
             <div class="card-body">
-                <form method="POST" enctype="multipart/form-data">
+                <form method="POST" enctype="multipart/form-data" id="upload-form">
                     {{ form.hidden_tag() }}
                     <div class="mb-3">
                         {{ form.display_name.label(class="form-label") }}
-                        {{ form.display_name(class="form-control", placeholder="给表格起个名字，如：2026年6月工资表") }}
+                        {{ form.display_name(class="form-control", placeholder="给这个工作表起个名字，如：2026年6月工资表") }}
                         {% for error in form.display_name.errors %}
                             <div class="text-danger small">{{ error }}</div>
                         {% endfor %}
@@ -20,11 +20,52 @@
                     <div class="mb-3">
                         {{ form.file.label(class="form-label") }}
                         {{ form.file(class="form-control", accept=".xlsx,.xls") }}
-                        <div class="form-text">支持 .xlsx 和 .xls 格式，文件最大 16MB</div>
+                        <div class="form-text">支持 .xlsx 和 .xls 格式</div>
                         {% for error in form.file.errors %}
                             <div class="text-danger small">{{ error }}</div>
                         {% endfor %}
                     </div>
+
+                    <!-- 上传方式 -->
+                    <div class="mb-3">
+                        <label class="form-label">上传方式</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="merge_mode" value="new" id="mode-new" checked>
+                            <label class="form-check-label" for="mode-new">
+                                <i class="bi bi-file-earmark-plus"></i> 创建新表格
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="merge_mode" value="merge" id="mode-merge"
+                                   {% if existing_files|length == 0 %}disabled{% endif %}>
+                            <label class="form-check-label" for="mode-merge">
+                                <i class="bi bi-files"></i> 合并到已有表格
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 目标表格选择（默认隐藏，选合并时显示） -->
+                    <div class="mb-3" id="target-file-group" style="display:none;">
+                        <label class="form-label">
+                            <i class="bi bi-arrow-right-circle"></i> 选择要合并到的表格
+                        </label>
+                        <select class="form-select" name="target_file_id" id="target-file-select">
+                            <option value="">-- 请选择 --</option>
+                            {% for f in existing_files %}
+                            <option value="{{ f.id }}">
+                                {{ f.display_name }}
+                                {% if f.sheets.count() > 0 %}
+                                （已有 {{ f.sheets.count() }} 个工作表）
+                                {% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text text-info">
+                            <i class="bi bi-info-circle"></i>
+                            新上传的 Excel 中的每个工作表将作为新的工作表追加到所选表格中
+                        </div>
+                    </div>
+
                     {{ form.submit(class="btn btn-success") }}
                     <a href="{{ url_for('admin.dashboard') }}" class="btn btn-secondary">返回</a>
                 </form>
@@ -32,4 +73,33 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // 切换上传方式
+    document.querySelectorAll('input[name="merge_mode"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            const targetGroup = document.getElementById('target-file-group');
+            if (this.value === 'merge') {
+                targetGroup.style.display = 'block';
+            } else {
+                targetGroup.style.display = 'none';
+                document.getElementById('target-file-select').value = '';
+            }
+        });
+    });
+
+    // 表单提交前验证
+    document.getElementById('upload-form').addEventListener('submit', function(e) {
+        const mode = document.querySelector('input[name="merge_mode"]:checked').value;
+        if (mode === 'merge') {
+            const targetId = document.getElementById('target-file-select').value;
+            if (!targetId) {
+                e.preventDefault();
+                alert('请选择要合并到的目标表格！');
+            }
+        }
+    });
+</script>
 {% endblock %}

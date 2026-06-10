@@ -8,24 +8,31 @@ from app.extensions import db
 from flask import current_app
 
 
-def import_excel(file_obj, stored_path, excel_file_record):
+def import_excel(stored_path, excel_file_record, starting_sheet_order=0):
     """
     Read an uploaded Excel file, parse all sheets into Sheet/SheetColumn/SheetRow.
 
     Args:
-        file_obj: file-like object from the uploaded form
         stored_path: where the file is saved on disk
-        excel_file_record: ExcelFile ORM instance (already committed)
+        excel_file_record: ExcelFile ORM instance (already flushed)
+        starting_sheet_order: offset for sheet_order (used when merging into existing file)
 
     Returns:
         list of Sheet instances created
     """
-    file_obj.save(stored_path)
     wb = load_workbook(stored_path, data_only=True)
 
     created_sheets = []
 
-    for sheet_order, sheet_name in enumerate(wb.sheetnames):
+    # If merging, check for duplicate sheet names
+    if starting_sheet_order > 0:
+        existing_names = set(
+            s.sheet_name for s in Sheet.query.filter_by(file_id=excel_file_record.id).all()
+        )
+    else:
+        existing_names = set()
+
+    for i, sheet_name in enumerate(wb.sheetnames):
         ws = wb[sheet_name]
 
         # Determine row bounds
@@ -43,10 +50,19 @@ def import_excel(file_obj, stored_path, excel_file_record):
         if not headers:
             continue
 
+        # Handle duplicate sheet names when merging
+        final_sheet_name = sheet_name
+        if sheet_name in existing_names:
+            counter = 2
+            while f'{sheet_name} ({counter})' in existing_names:
+                counter += 1
+            final_sheet_name = f'{sheet_name} ({counter})'
+        existing_names.add(final_sheet_name)
+
         sheet = Sheet(
             file_id=excel_file_record.id,
-            sheet_name=sheet_name,
-            sheet_order=sheet_order,
+            sheet_name=final_sheet_name,
+            sheet_order=starting_sheet_order + i,
         )
         db.session.add(sheet)
         db.session.flush()  # get sheet.id
@@ -79,7 +95,9 @@ def import_excel(file_obj, stored_path, excel_file_record):
         created_sheets.append(sheet)
 
     wb.close()
-    db.session.commit()
+    # NOTE: commit is handled by the caller so the entire upload
+    # (file_record + sheets + rows) is one atomic transaction.
+    db.session.flush()
     return created_sheets
 
 

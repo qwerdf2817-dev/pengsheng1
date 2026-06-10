@@ -9,13 +9,36 @@
             <span class="text-secondary">灰色单元格</span> = 只读
         </small>
     </div>
-    <div>
+    <div class="d-flex gap-2 align-items-center">
+        <!-- 确认修改完毕 -->
+        <button id="confirm-btn" class="btn btn-warning" onclick="confirmComplete()" disabled>
+            <i class="bi bi-check2-all"></i> 确认修改完毕
+        </button>
         <button id="save-btn" class="btn btn-success" onclick="saveChanges()" disabled>
             <i class="bi bi-check-lg"></i> 保存修改
         </button>
         <a href="{{ url_for('editor.file_list') }}" class="btn btn-secondary">
             <i class="bi bi-arrow-left"></i> 返回
         </a>
+    </div>
+</div>
+
+<!-- 用户完成状态条 -->
+<div class="card mb-3" id="status-card" style="display:none;">
+    <div class="card-body py-2 px-3">
+        <div class="d-flex align-items-center justify-content-between">
+            <div>
+                <i class="bi bi-people-fill"></i>
+                <strong>编辑完成状态：</strong>
+                <span id="status-summary"></span>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#user-status-list">
+                <i class="bi bi-chevron-down"></i> 展开
+            </button>
+        </div>
+        <div class="collapse mt-2" id="user-status-list">
+            <div id="user-status-items" class="d-flex flex-wrap gap-2"></div>
+        </div>
     </div>
 </div>
 
@@ -53,6 +76,26 @@
     #hot-container .handsontable td.editable-cell {
         background-color: #e8f5e9;
     }
+    .user-status-badge {
+        font-size: 0.9rem;
+        padding: 6px 12px;
+        border-radius: 20px;
+    }
+    .user-status-done {
+        background-color: #d1e7dd;
+        color: #0f5132;
+        border: 1px solid #198754;
+    }
+    .user-status-pending {
+        background-color: #fff3cd;
+        color: #664d03;
+        border: 1px solid #ffc107;
+        animation: pulse-warning 2s infinite;
+    }
+    @keyframes pulse-warning {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
 </style>
 {% endblock %}
 
@@ -61,21 +104,24 @@
 <script src="https://cdn.jsdelivr.net/npm/handsontable@14.6.1/dist/handsontable.full.min.js"></script>
 
 <script>
+    const FILE_ID = {{ file.id }};
     let hot = null;
     let currentSheetId = null;
     let currentColumnKeys = [];
     let currentPermissions = [];
     let originalData = null;
     let pendingChanges = [];
+    let myCompleted = false;
 
     // Initialize with the first sheet on load
     const firstTab = document.querySelector('#sheet-tabs button');
     if (firstTab) {
         loadSheet(firstTab.dataset.sheetId);
     }
+    // Load completion status on page load
+    loadStatus();
 
     function switchSheet(sheetId, btn) {
-        // Update tab UI
         document.querySelectorAll('#sheet-tabs button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         loadSheet(sheetId);
@@ -128,16 +174,13 @@
                             const [row, prop, oldVal, newVal] = change;
                             const colIdx = hot.propToCol(prop);
 
-                            // Check if this cell is editable
                             if (!hasPermission(row, colIdx)) {
-                                // Revert non-permitted changes
                                 setTimeout(() => {
                                     hot.setDataAtCell(row, colIdx, oldVal);
                                 }, 0);
                                 return;
                             }
 
-                            // Record pending change
                             const existing = pendingChanges.find(c => c.row === row && c.col === colIdx);
                             if (existing) {
                                 existing.new_value = newVal;
@@ -194,8 +237,6 @@
                 pendingChanges = [];
                 btn.innerHTML = '<i class="bi bi-check-lg"></i> 保存修改';
                 document.getElementById('status-text').textContent = '已保存';
-
-                // Refresh original data reference
                 originalData = JSON.parse(JSON.stringify(hot.getData()));
             } else {
                 document.getElementById('save-status').innerHTML =
@@ -214,5 +255,98 @@
             btn.innerHTML = '<i class="bi bi-check-lg"></i> 保存修改';
         });
     }
+
+    // ── 确认修改完毕 ──
+    function confirmComplete() {
+        if (!confirm('确定标记为"修改完毕"吗？确认后管理员将看到你的完成状态。')) return;
+
+        const btn = document.getElementById('confirm-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 提交中...';
+
+        fetch(`/api/file/${FILE_ID}/confirm`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    myCompleted = true;
+                    btn.innerHTML = '<i class="bi bi-check-circle-fill"></i> 已确认完毕';
+                    btn.classList.remove('btn-warning');
+                    btn.classList.add('btn-success');
+                    btn.disabled = true;
+                    loadStatus(); // refresh status list
+                } else {
+                    alert(data.error || '操作失败');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-check2-all"></i> 确认修改完毕';
+                }
+            })
+            .catch(err => {
+                alert('网络错误: ' + err.message);
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-check2-all"></i> 确认修改完毕';
+            });
+    }
+
+    // ── 加载完成状态 ──
+    function loadStatus() {
+        fetch(`/api/file/${FILE_ID}/status`)
+            .then(r => r.json())
+            .then(data => {
+                const card = document.getElementById('status-card');
+                const summary = document.getElementById('status-summary');
+                const itemsContainer = document.getElementById('user-status-items');
+                const confirmBtn = document.getElementById('confirm-btn');
+
+                if (data.total === 0) {
+                    // No permitted users found — admin may be viewing
+                    card.style.display = 'none';
+                    confirmBtn.style.display = 'none';
+                    return;
+                }
+
+                card.style.display = 'block';
+
+                // Summary
+                const allDone = data.completed_count === data.total;
+                if (allDone) {
+                    summary.innerHTML = `<span class="text-success fw-bold">全部完成！</span> (${data.completed_count}/${data.total})`;
+                } else {
+                    const pending = data.total - data.completed_count;
+                    summary.innerHTML = `<span class="text-warning fw-bold">${pending} 人未完成</span> (${data.completed_count}/${data.total})`;
+                }
+
+                // User badges
+                itemsContainer.innerHTML = data.users.map(u => {
+                    if (u.is_completed) {
+                        return `<span class="user-status-badge user-status-done">
+                            <i class="bi bi-check-circle-fill"></i> ${u.username}
+                            <small>${u.completed_at || ''}</small>
+                        </span>`;
+                    } else {
+                        return `<span class="user-status-badge user-status-pending">
+                            <i class="bi bi-clock-fill"></i> ${u.username}
+                            <small>未完成</small>
+                        </span>`;
+                    }
+                }).join('');
+
+                // My status
+                myCompleted = data.my_completed;
+                if (myCompleted) {
+                    confirmBtn.innerHTML = '<i class="bi bi-check-circle-fill"></i> 已确认完毕';
+                    confirmBtn.classList.remove('btn-warning');
+                    confirmBtn.classList.add('btn-success');
+                    confirmBtn.disabled = true;
+                } else {
+                    confirmBtn.innerHTML = '<i class="bi bi-check2-all"></i> 确认修改完毕';
+                    confirmBtn.classList.remove('btn-success');
+                    confirmBtn.classList.add('btn-warning');
+                    confirmBtn.disabled = false;
+                }
+            });
+    }
+
+    // 定时刷新状态（每30秒）
+    setInterval(loadStatus, 30000);
 </script>
 {% endblock %}

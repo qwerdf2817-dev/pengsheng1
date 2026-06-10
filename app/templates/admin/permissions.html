@@ -22,6 +22,20 @@
         </button>
     </div>
     <div class="card-body">
+        <!-- 选择模式工具栏 -->
+        <div class="selection-toolbar" id="toolbar-{{ sheet.id }}">
+            <div>
+                <i class="bi bi-cursor-fill"></i>
+                <strong>选择模式</strong>
+                <span class="ms-2">光标位置:</span>
+                <span class="coord" id="coord-display-{{ sheet.id }}">[-,-]</span>
+                <span class="ms-3" id="range-info-{{ sheet.id }}" style="color:#ffd966;">请拖拽选择区域</span>
+            </div>
+            <button class="btn-cancel" onclick="cancelSelect({{ sheet.id }})">
+                <i class="bi bi-x-circle"></i> 取消
+            </button>
+        </div>
+
         <!-- Preview table (compact) -->
         <div class="table-responsive mb-3">
             <table class="table table-bordered table-sm permission-table" data-sheet-id="{{ sheet.id }}">
@@ -92,6 +106,8 @@
         min-width: 60px;
         height: 28px;
         font-size: 0.8rem;
+        position: relative;
+        transition: background-color 0.1s;
     }
     .permission-table td.selected {
         background-color: #cfe2ff !important;
@@ -107,6 +123,69 @@
     .selecting {
         cursor: crosshair !important;
     }
+    /* 光标跟随 — 鼠标悬停时的实时高亮 */
+    .permission-table td.cursor-hover {
+        background-color: #fff3cd !important;
+        border-color: #ffc107 !important;
+        outline: 2px solid #fd7e14;
+        outline-offset: -2px;
+        z-index: 10;
+    }
+    /* 拖拽选区预览 — 鼠标按下后拖拽过程中覆盖的单元格 */
+    .permission-table td.range-preview {
+        background-color: #e7f1ff !important;
+        border-color: #0d6efd !important;
+    }
+    /* 选区起始标记 */
+    .permission-table td.range-start {
+        background-color: #ffc107 !important;
+        border-color: #fd7e14 !important;
+    }
+    /* 选区结束标记（跟随鼠标） */
+    .permission-table td.range-end {
+        background-color: #ff9800 !important;
+        border-color: #e65100 !important;
+    }
+    /* 选择模式提示条 */
+    .selection-toolbar {
+        display: none;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 10px 16px;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        font-size: 0.9rem;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+    .selection-toolbar.active {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .selection-toolbar .coord {
+        font-weight: bold;
+        background: rgba(255,255,255,0.25);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 1rem;
+    }
+    .selection-toolbar .btn-cancel {
+        background: rgba(255,255,255,0.2);
+        border: 1px solid rgba(255,255,255,0.3);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        transition: background 0.2s;
+    }
+    .selection-toolbar .btn-cancel:hover {
+        background: rgba(255,255,255,0.35);
+    }
 </style>
 {% endblock %}
 
@@ -115,96 +194,216 @@
     let selectMode = false;
     let selectSheetId = null;
     let selectStart = null;
+    let isDragging = false;
 
     function addRange(sheetId) {
         if (selectMode) {
-            // Cancel existing selection
-            cancelSelect(sheetId);
+            cancelSelect(selectSheetId);
         }
         selectMode = true;
         selectSheetId = sheetId;
         selectStart = null;
+        isDragging = false;
 
         const table = document.querySelector(`.permission-table[data-sheet-id="${sheetId}"]`);
-        table.querySelectorAll('td.editable-cell').forEach(cell => {
+        const cells = table.querySelectorAll('td.editable-cell');
+
+        // 进入选择模式
+        cells.forEach(cell => {
             cell.classList.add('selecting');
             cell.style.cursor = 'crosshair';
+        });
+
+        // 显示选择工具栏
+        showToolbar(sheetId);
+
+        // 光标跟随：鼠标悬停高亮
+        table.addEventListener('mouseover', onCellHover);
+        table.addEventListener('mouseout', onCellLeave);
+
+        // 鼠标按下开始拖拽
+        cells.forEach(cell => {
             cell.addEventListener('mousedown', onCellMouseDown);
         });
 
-        alert('请在预览表格中用鼠标拖拽选择可编辑区域（从起始单元格到结束单元格）');
+        // 鼠标松开完成选择（在 table 级别监听）
+        table.addEventListener('mouseup', onTableMouseUp);
     }
 
+    // ── 光标跟随：鼠标进入单元格时高亮 ──
+    function onCellHover(e) {
+        const cell = e.target.closest('td.editable-cell');
+        if (!cell) return;
+
+        // 移除所有光标 hover
+        const table = cell.closest('.permission-table');
+        table.querySelectorAll('td.cursor-hover').forEach(c => c.classList.remove('cursor-hover'));
+
+        // 高亮当前单元格
+        cell.classList.add('cursor-hover');
+
+        // 更新坐标显示
+        updateCoord(cell);
+
+        // 如果正在拖拽，更新选区预览
+        if (isDragging && selectStart) {
+            updateRangePreview(table, selectStart.col, selectStart.row,
+                parseInt(cell.dataset.col), parseInt(cell.dataset.row));
+        }
+    }
+
+    function onCellLeave(e) {
+        const cell = e.target.closest('td.editable-cell');
+        if (cell) {
+            cell.classList.remove('cursor-hover');
+        }
+    }
+
+    // ── 更新坐标显示 ──
+    function updateCoord(cell) {
+        const col = parseInt(cell.dataset.col);
+        const row = parseInt(cell.dataset.row);
+        const el = document.getElementById('coord-display-' + selectSheetId);
+        if (el) {
+            el.textContent = `[${col}, ${row}]`;
+        }
+    }
+
+    // ── 显示选择工具栏 ──
+    function showToolbar(sheetId) {
+        const toolbar = document.getElementById('toolbar-' + sheetId);
+        if (toolbar) toolbar.classList.add('active');
+    }
+
+    function hideToolbar(sheetId) {
+        const toolbar = document.getElementById('toolbar-' + sheetId);
+        if (toolbar) toolbar.classList.remove('active');
+    }
+
+    // ── 鼠标按下：开始拖拽 ──
     function onCellMouseDown(e) {
-        const cell = e.target;
+        e.preventDefault();
+        const cell = e.target.closest('td.editable-cell');
+        if (!cell) return;
+
         const col = parseInt(cell.dataset.col);
         const row = parseInt(cell.dataset.row);
 
         selectStart = { col, row };
+        isDragging = true;
 
-        // Listen for mouseup on this cell or another
         const table = cell.closest('.permission-table');
-        const cells = table.querySelectorAll('td.editable-cell');
 
-        function onMouseUp(e2) {
-            const endCell = e2.target.closest('td.editable-cell');
-            if (!endCell) return;
-
-            const colEnd = parseInt(endCell.dataset.col);
-            const rowEnd = parseInt(endCell.dataset.row);
-
-            if (selectStart === null) return;
-
-            // Normalize: ensure start <= end
-            const colStart = Math.min(selectStart.col, colEnd);
-            const realColEnd = Math.max(selectStart.col, colEnd);
-            const rowStart = Math.min(selectStart.row, rowEnd);
-            const realRowEnd = Math.max(selectStart.row, rowEnd);
-
-            // Fill hidden form and submit
-            document.getElementById('form-sheet-id').value = selectSheetId;
-            document.getElementById('form-col-start').value = colStart;
-            document.getElementById('form-col-end').value = realColEnd;
-            document.getElementById('form-row-start').value = rowStart;
-            document.getElementById('form-row-end').value = realRowEnd;
-
-            fetch(window.location.href, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams(new FormData(document.getElementById('perm-form')))
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    location.reload();
-                } else {
-                    alert('保存失败: ' + data.error);
-                }
-            });
-
-            // Cleanup
-            cancelSelect(selectSheetId);
-            cells.forEach(c => c.removeEventListener('mouseup', onMouseUp));
-        }
-
-        cells.forEach(c => c.addEventListener('mouseup', onMouseUp, { once: true }));
+        // 标记起始单元格
+        cell.classList.add('range-start');
     }
 
+    // ── 更新拖拽选区预览 ──
+    function updateRangePreview(table, c1, r1, c2, r2) {
+        const colMin = Math.min(c1, c2);
+        const colMax = Math.max(c1, c2);
+        const rowMin = Math.min(r1, r2);
+        const rowMax = Math.max(r1, r2);
+
+        // 清除旧预览
+        table.querySelectorAll('td.range-preview, td.range-start, td.range-end').forEach(c => {
+            c.classList.remove('range-preview', 'range-start', 'range-end');
+        });
+
+        // 高亮选区内的所有单元格
+        for (let r = rowMin; r <= rowMax; r++) {
+            for (let c = colMin; c <= colMax; c++) {
+                const cell = table.querySelector(`td[data-row="${r}"][data-col="${c}"]`);
+                if (cell) {
+                    cell.classList.add('range-preview');
+                }
+            }
+        }
+
+        // 高亮起始格
+        const startCell = table.querySelector(`td[data-row="${r1}"][data-col="${c1}"]`);
+        if (startCell) startCell.classList.add('range-start');
+
+        // 高亮结束格（当前鼠标位置）
+        const endCell = table.querySelector(`td[data-row="${r2}"][data-col="${c2}"]`);
+        if (endCell) endCell.classList.add('range-end');
+
+        // 更新工具栏坐标
+        const toolbar = document.getElementById('range-info-' + selectSheetId);
+        if (toolbar) {
+            toolbar.textContent = `选区: [${colMin},${rowMin}] → [${colMax},${rowMax}]  (${colMax - colMin + 1}列 × ${rowMax - rowMin + 1}行)`;
+        }
+    }
+
+    // ── 鼠标松开：确认选区 ──
+    function onTableMouseUp(e) {
+        if (!isDragging || !selectStart) return;
+
+        const endCell = e.target.closest('td.editable-cell');
+        if (!endCell) {
+            // 鼠标松开在表格外，取消
+            cancelSelect(selectSheetId);
+            return;
+        }
+
+        const colEnd = parseInt(endCell.dataset.col);
+        const rowEnd = parseInt(endCell.dataset.row);
+
+        const colStart = Math.min(selectStart.col, colEnd);
+        const realColEnd = Math.max(selectStart.col, colEnd);
+        const rowStart = Math.min(selectStart.row, rowEnd);
+        const realRowEnd = Math.max(selectStart.row, rowEnd);
+
+        // 填充并提交表单
+        document.getElementById('form-sheet-id').value = selectSheetId;
+        document.getElementById('form-col-start').value = colStart;
+        document.getElementById('form-col-end').value = realColEnd;
+        document.getElementById('form-row-start').value = rowStart;
+        document.getElementById('form-row-end').value = realRowEnd;
+
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams(new FormData(document.getElementById('perm-form')))
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                location.reload();
+            } else {
+                alert('保存失败: ' + data.error);
+                cancelSelect(selectSheetId);
+            }
+        });
+
+        isDragging = false;
+    }
+
+    // ── 取消选择模式 ──
     function cancelSelect(sheetId) {
         selectMode = false;
         selectSheetId = null;
         selectStart = null;
+        isDragging = false;
 
         const table = document.querySelector(`.permission-table[data-sheet-id="${sheetId}"]`);
         if (table) {
             table.querySelectorAll('td.editable-cell').forEach(cell => {
-                cell.classList.remove('selecting');
+                cell.classList.remove('selecting', 'cursor-hover', 'range-preview', 'range-start', 'range-end');
                 cell.style.cursor = 'default';
-                cell.classList.remove('selected');
+                cell.replaceWith(cell.cloneNode(true)); // 移除所有事件监听
             });
+
+            // 移除 table 级别的事件
+            table.removeEventListener('mouseover', onCellHover);
+            table.removeEventListener('mouseout', onCellLeave);
+            table.removeEventListener('mouseup', onTableMouseUp);
         }
+
+        hideToolbar(sheetId);
     }
 
+    // ── 删除权限 ──
     function deletePerm(permId, sheetId) {
         if (!confirm('确定删除该权限区域吗？')) return;
         fetch(`/admin/permissions/${permId}/delete`, { method: 'POST' })
@@ -214,7 +413,7 @@
             });
     }
 
-    // Highlight existing permitted cells on load
+    // ── 页面加载：高亮已有权限区域 ──
     document.addEventListener('DOMContentLoaded', function() {
         const existingPerms = {{ permissions | tojson }};
         for (const [sheetId, perms] of Object.entries(existingPerms)) {

@@ -3,15 +3,71 @@
 {% block content %}
 <h2 class="mb-4"><i class="bi bi-table"></i> 可编辑表格列表</h2>
 
+<!-- 管理员快捷入口 -->
+{% if current_user.is_admin %}
+<div class="row mb-4">
+    <div class="col-md-3 mb-2">
+        <a href="{{ url_for('admin.dashboard') }}" class="text-decoration-none">
+            <div class="card border-primary bg-primary bg-opacity-10 h-100">
+                <div class="card-body text-center py-3">
+                    <i class="bi bi-gear-fill text-primary" style="font-size: 1.5rem;"></i>
+                    <h6 class="mt-2 mb-0 text-primary">管理后台</h6>
+                    <small class="text-muted">管理所有表格</small>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 mb-2">
+        <a href="{{ url_for('admin.upload') }}" class="text-decoration-none">
+            <div class="card border-success bg-success bg-opacity-10 h-100">
+                <div class="card-body text-center py-3">
+                    <i class="bi bi-upload text-success" style="font-size: 1.5rem;"></i>
+                    <h6 class="mt-2 mb-0 text-success">上传表格</h6>
+                    <small class="text-muted">上传或合并 Excel</small>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 mb-2">
+        <a href="{{ url_for('admin.user_list') }}" class="text-decoration-none">
+            <div class="card border-info bg-info bg-opacity-10 h-100">
+                <div class="card-body text-center py-3">
+                    <i class="bi bi-people-fill text-info" style="font-size: 1.5rem;"></i>
+                    <h6 class="mt-2 mb-0 text-info">用户权限</h6>
+                    <small class="text-muted">分配编辑区域</small>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-3 mb-2">
+        <a href="{{ url_for('admin.history', file_id=0) }}" class="text-decoration-none">
+            <div class="card border-warning bg-warning bg-opacity-10 h-100">
+                <div class="card-body text-center py-3">
+                    <i class="bi bi-clock-history text-warning" style="font-size: 1.5rem;"></i>
+                    <h6 class="mt-2 mb-0 text-warning">编辑日志</h6>
+                    <small class="text-muted">查看操作记录</small>
+                </div>
+            </div>
+        </a>
+    </div>
+</div>
+{% endif %}
+
 {% if files %}
 <div class="row">
     {% for f in files %}
+    {% set stats = file_stats.get(f.id, {}) %}
     <div class="col-md-4 mb-3">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <h5 class="card-title">
                     <i class="bi bi-file-earmark-spreadsheet text-success"></i>
                     {{ f.display_name }}
+                    {% if stats.my_completed %}
+                        <span class="badge bg-success ms-2">
+                            <i class="bi bi-check-circle"></i> 已确认完毕
+                        </span>
+                    {% endif %}
                 </h5>
                 <p class="card-text text-muted small">
                     工作表：
@@ -22,6 +78,23 @@
                 <p class="card-text text-muted small">
                     上传时间：{{ f.created_at.strftime('%Y-%m-%d %H:%M') }}
                 </p>
+                <!-- 完成状态进度条 -->
+                {% if stats.permitted_count and stats.permitted_count > 0 %}
+                <div class="mt-2">
+                    <div class="d-flex justify-content-between small">
+                        <span>编辑进度</span>
+                        <span class="{% if stats.completed_count == stats.permitted_count %}text-success{% else %}text-warning{% endif %}">
+                            {{ stats.completed_count }}/{{ stats.permitted_count }}
+                        </span>
+                    </div>
+                    <div class="progress" style="height: 6px;">
+                        <div class="progress-bar {% if stats.completed_count == stats.permitted_count %}bg-success{% else %}bg-warning{% endif %}"
+                             role="progressbar"
+                             style="width: {{ (stats.completed_count / stats.permitted_count * 100) if stats.permitted_count > 0 else 0 }}%">
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
             <div class="card-footer bg-transparent">
                 <a href="{{ url_for('editor.editor_page', file_id=f.id) }}" class="btn btn-primary btn-sm w-100">

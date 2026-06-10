@@ -167,3 +167,26 @@ class EditHistory(db.Model):
 
     def __repr__(self):
         return f'<EditHistory user={self.user_id} [{self.column_key}]>'
+
+
+# ──────────────────────────────────────────────
+# 8. user_edit_status — track who has finished editing
+# ──────────────────────────────────────────────
+class UserEditStatus(db.Model):
+    __tablename__ = 'user_edit_status'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    file_id = db.Column(db.Integer, db.ForeignKey('excel_files.id'), nullable=False)
+    is_completed = db.Column(db.Boolean, default=False)
+    completed_at = db.Column(db.DateTime)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+    file = db.relationship('ExcelFile', foreign_keys=[file_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'file_id', name='uq_user_file_status'),
+    )
+
+    def __repr__(self):
+        return f'<UserEditStatus user={self.user_id} file={self.file_id} done={self.is_completed}>'

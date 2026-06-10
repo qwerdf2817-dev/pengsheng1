@@ -1,9 +1,12 @@
+from datetime import datetime
 from flask import render_template, jsonify, request, abort
 from flask_login import login_required, current_user
+from sqlalchemy.orm.attributes import flag_modified
 from . import bp
 from app.models import (
     ExcelFile, Sheet, SheetColumn, SheetRow,
-    UserRangePermission, EditHistory,
+    UserRangePermission, EditHistory, UserEditStatus,
+    User,
 )
 from app.extensions import db
 
@@ -24,7 +27,48 @@ def file_list():
     # permissions are enforced per-sheet within the editor)
     files = ExcelFile.query.filter_by(is_active=True)\
         .order_by(ExcelFile.created_at.desc()).all()
-    return render_template('editor/file_list.html', files=files)
+
+    # Gather completion status per file for current user
+    file_status_map = {}
+    if current_user.is_authenticated:
+        statuses = UserEditStatus.query.filter(
+            UserEditStatus.user_id == current_user.id,
+            UserEditStatus.file_id.in_([f.id for f in files])
+        ).all() if files else []
+        file_status_map = {s.file_id: s for s in statuses}
+
+    # For each file, count total permitted users and completed users
+    file_stats = {}
+    for f in files:
+        sheet_ids = [s.id for s in f.sheets]
+        if sheet_ids:
+            permitted_count = db.session.query(
+                UserRangePermission.user_id
+            ).filter(
+                UserRangePermission.sheet_id.in_(sheet_ids)
+            ).distinct().count()
+
+            completed_count = UserEditStatus.query.filter(
+                UserEditStatus.file_id == f.id,
+                UserEditStatus.is_completed == True,
+                UserEditStatus.user_id.in_(
+                    db.session.query(UserRangePermission.user_id).filter(
+                        UserRangePermission.sheet_id.in_(sheet_ids)
+                    )
+                )
+            ).count()
+        else:
+            permitted_count = 0
+            completed_count = 0
+
+        my_status = file_status_map.get(f.id)
+        file_stats[f.id] = {
+            'permitted_count': permitted_count,
+            'completed_count': completed_count,
+            'my_completed': my_status.is_completed if my_status else False,
+        }
+
+    return render_template('editor/file_list.html', files=files, file_stats=file_stats)
 
 
 # ──────────────────────────────────────────────
@@ -156,6 +200,7 @@ def save_changes(sheet_id):
 
         # Write new value
         row.data[col_key] = str(new_value)
+        flag_modified(row, 'data')  # Ensure SQLAlchemy detects the in-place JSON mutation
 
         # Record edit history
         history = EditHistory(
@@ -178,3 +223,93 @@ def _has_permission(perms, row, col):
         if p.col_start <= col <= p.col_end and p.row_start <= row <= p.row_end:
             return True
     return False
+
+
+# ──────────────────────────────────────────────
+# API: Confirm editing complete
+# ──────────────────────────────────────────────
+@bp.route('/api/file/<int:file_id>/confirm', methods=['POST'])
+def confirm_complete(file_id):
+    """Mark current user's editing as complete for this file."""
+    file_record = ExcelFile.query.get_or_404(file_id)
+
+    # Check user has any permission on this file
+    sheet_ids = [s.id for s in file_record.sheets]
+    has_permission = UserRangePermission.query.filter(
+        UserRangePermission.user_id == current_user.id,
+        UserRangePermission.sheet_id.in_(sheet_ids)
+    ).first() is not None
+
+    if not has_permission and not current_user.is_admin:
+        return jsonify({'ok': False, 'error': '你在此表格中没有可编辑区域'}), 403
+
+    # Create or update status
+    status = UserEditStatus.query.filter_by(
+        user_id=current_user.id, file_id=file_id
+    ).first()
+
+    if not status:
+        status = UserEditStatus(
+            user_id=current_user.id,
+            file_id=file_id,
+        )
+        db.session.add(status)
+
+    status.is_completed = True
+    status.completed_at = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({'ok': True, 'message': '已确认修改完毕'})
+
+
+# ──────────────────────────────────────────────
+# API: Get completion status for a file
+# ──────────────────────────────────────────────
+@bp.route('/api/file/<int:file_id>/status')
+def file_status(file_id):
+    """Get edit completion status for all users of this file."""
+    file_record = ExcelFile.query.get_or_404(file_id)
+
+    # Find all users who have permissions on this file
+    sheet_ids = [s.id for s in file_record.sheets]
+    user_perm_rows = db.session.query(
+        UserRangePermission.user_id
+    ).filter(
+        UserRangePermission.sheet_id.in_(sheet_ids)
+    ).distinct().all()
+
+    permitted_user_ids = set(r[0] for r in user_perm_rows)
+
+    # Get all permitted users
+    permitted_users = User.query.filter(User.id.in_(permitted_user_ids)).all() if permitted_user_ids else []
+
+    # Get edit statuses
+    statuses = UserEditStatus.query.filter(
+        UserEditStatus.file_id == file_id,
+        UserEditStatus.user_id.in_(permitted_user_ids)
+    ).all() if permitted_user_ids else []
+    status_map = {s.user_id: s for s in statuses}
+
+    users_status = []
+    for user in permitted_users:
+        st = status_map.get(user.id)
+        users_status.append({
+            'user_id': user.id,
+            'username': user.username,
+            'is_completed': st.is_completed if st else False,
+            'completed_at': st.completed_at.strftime('%Y-%m-%d %H:%M') if (st and st.completed_at) else None,
+        })
+
+    # Sort: incomplete first, then by username
+    users_status.sort(key=lambda u: (u['is_completed'], u['username']))
+
+    # Current user's own status
+    my_status = status_map.get(current_user.id)
+    my_completed = my_status.is_completed if my_status else False
+
+    return jsonify({
+        'users': users_status,
+        'my_completed': my_completed,
+        'total': len(users_status),
+        'completed_count': sum(1 for u in users_status if u['is_completed']),
+    })
