@@ -10,7 +10,7 @@ class UploadForm(FlaskForm):
         ('new', '创建新表格'),
         ('merge', '合并到已有表格'),
     ], default='new')
-    target_file_id = SelectField('目标表格', coerce=int, validators=[Optional()])
+    target_file_id = HiddenField('目标表格', validators=[Optional()])
     submit = SubmitField('上传')
 
 
