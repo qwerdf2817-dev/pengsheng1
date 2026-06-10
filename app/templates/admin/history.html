@@ -1,10 +1,15 @@
 {% extends "base.html" %}
-{% block title %}编辑日志 — {{ file.display_name }}{% endblock %}
+{% block title %}{% if file %}编辑日志 — {{ file.display_name }}{% else %}全局编辑日志{% endif %}{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-clock-history"></i> 编辑日志 — {{ file.display_name }}</h2>
+    <h2>
+        <i class="bi bi-clock-history"></i>
+        {% if file %}编辑日志 — {{ file.display_name }}
+        {% else %}全局编辑日志 <small class="text-muted fs-6">所有活跃表格</small>
+        {% endif %}
+    </h2>
     <a href="{{ url_for('admin.dashboard') }}" class="btn btn-secondary">
-        <i class="bi bi-arrow-left"></i> 返回
+        <i class="bi bi-arrow-left"></i> 返回管理后台
     </a>
 </div>
 
@@ -15,6 +20,7 @@
             <tr>
                 <th>时间</th>
                 <th>用户</th>
+                {% if not file %}<th>表格</th><th>工作表</th>{% endif %}
                 <th>列</th>
                 <th>旧值</th>
                 <th>新值</th>
@@ -26,6 +32,17 @@
             <tr>
                 <td><small>{{ r.edited_at.strftime('%Y-%m-%d %H:%M:%S') }}</small></td>
                 <td>{{ users.get(r.user_id, '未知') }}</td>
+                {% if not file %}
+                {% set s = sheet_map.get(r.sheet_id) %}
+                <td>
+                    {% if s and file_map.get(s.file_id) %}
+                    <a href="{{ url_for('admin.history', file_id=s.file_id) }}" class="text-decoration-none">
+                        {{ file_map[s.file_id].display_name }}
+                    </a>
+                    {% else %}-{% endif %}
+                </td>
+                <td><span class="badge bg-secondary">{{ s.sheet_name if s else '-' }}</span></td>
+                {% endif %}
                 <td><code>{{ r.column_key }}</code></td>
                 <td><span class="text-danger">{{ r.old_value or '(空)' }}</span></td>
                 <td><span class="text-success">{{ r.new_value or '(空)' }}</span></td>

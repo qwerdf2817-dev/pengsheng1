@@ -275,13 +275,21 @@ def delete_permission(perm_id):
 
 
 # ──────────────────────────────────────────────
-# View edit history for a file
+# View edit history (all files, or specific file)
 # ──────────────────────────────────────────────
+@bp.route('/history')
 @bp.route('/history/<int:file_id>')
-def history(file_id):
-    file_record = ExcelFile.query.get_or_404(file_id)
-    sheets = Sheet.query.filter_by(file_id=file_id).all()
-    sheet_ids = [s.id for s in sheets]
+def history(file_id=None):
+    if file_id:
+        file_record = ExcelFile.query.get_or_404(file_id)
+        sheets = Sheet.query.filter_by(file_id=file_id).all()
+        sheet_ids = [s.id for s in sheets]
+    else:
+        # Global history — show latest records across all active files
+        file_record = None
+        active_file_ids = [f.id for f in ExcelFile.query.filter_by(is_active=True).all()]
+        sheets = Sheet.query.filter(Sheet.file_id.in_(active_file_ids)).all()
+        sheet_ids = [s.id for s in sheets]
 
     records = EditHistory.query.filter(EditHistory.sheet_id.in_(sheet_ids))\
         .order_by(EditHistory.edited_at.desc()).limit(500).all()
@@ -290,9 +298,15 @@ def history(file_id):
     user_ids = set(r.user_id for r in records)
     users = {u.id: u.username for u in User.query.filter(User.id.in_(user_ids)).all()}
 
+    # Build file/sheet lookup for global view
+    sheet_map = {s.id: s for s in sheets}
+    file_map = {f.id: f for f in ExcelFile.query.all()}
+
     return render_template(
         'admin/history.html',
         file=file_record,
         records=records,
         users=users,
+        sheet_map=sheet_map,
+        file_map=file_map,
     )
